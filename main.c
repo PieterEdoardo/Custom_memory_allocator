@@ -2,9 +2,9 @@
 #include <string.h>
 #include <stddef.h>
 
-/*
- * Allocator code
- */
+/******************
+ * Allocator code *
+ ******************/
 
 // pool and block size
 #define POOL_SIZE 4096 // 4kb memory pool
@@ -23,7 +23,7 @@ typedef struct block_header {
 
 static char memory_pool[POOL_SIZE];
 static block_header_t* free_list_head = NULL;
-static int initialized = 0; // Boolean
+static int initialized = 0; // False
 
 // Allocator initiation
 void init_allocator() {
@@ -32,11 +32,11 @@ void init_allocator() {
     // Treat start of pool as the first header
     free_list_head = (block_header_t*)memory_pool;
     free_list_head->size = POOL_SIZE - sizeof(block_header_t);
-    free_list_head->is_free = 1; // true
+    free_list_head->is_free = 1; // True
     free_list_head->next = NULL;
 
-    initialized = 1; // set to true
-    printf("[INIT] Allocator initialized with %zu bytes\n", free_list_head->H)
+    initialized = 1; // True
+    printf("[INIT] Allocator initialized with %zu bytes\n", free_list_head->size)
 }
 
 // Custom malloc implementation
@@ -45,7 +45,11 @@ void init_allocator() {
 
 // Debug function to print memory state
 
-/*
- * Test program code
- */
+/*********************
+ * Test program code *
+ *********************/
 
+void main() {
+    printf("Custom Memory Allocator Test\n");
+    init_allocator();
+}
