@@ -8,7 +8,7 @@
 
 // pool and block size
 #define POOL_SIZE 4096 // 4kb memory pool
-#define MIN_BLOCK_size // Minimum seze for splitting
+#define MIN_BLOCK_SIZE 32// Minimum size for splitting
 
 // Block header structure
 // Metadata for each memory block
@@ -38,11 +38,36 @@ void init_allocator() {
 }
 
 // Custom malloc implementation
+void my_malloc(size_t size) {
+    if (!initialized) init_allocator(); // Init if not done yet.
+    if (size == 0) return NULL; // Can't allocate if no room.
+
+    // Align size to 8 bytes for better performance
+    size = (size + 7) & ~7;
+
+    block_header_t* current = free_list_head;
+
+    // First-fit strategy: find first block that's big enough.
+    while (current =! NULL) {
+        if (current ->is_free && current->size >= size) {
+            printf("[ALLOC] Found free block: size=%zu at %p\n", current->size, (void*)current);
+
+            // Should block be split?
+            // Only split if remaining space is useful (> MIN_BLOCK_SIZE)
+
+        }
+    }
+}
 
 // Custom free implementation
+void my_free() {
+
+}
 
 // Debug function to print memory state
+void print_memory_state() {
 
+}
 /*********************
  * Test program code *
  *********************/
