@@ -12,13 +12,11 @@
 
 // Block header structure
 // Metadata for each memory block
-static char memory_pool[100];
-
 typedef struct block_header {
     size_t size;                // Size without header
     int is_free;                // Boolean
     struct block_header* next;  // Pointer to next block in the list
-} block_header_t
+} block_header_t;
 
 
 static char memory_pool[POOL_SIZE];
@@ -36,7 +34,7 @@ void init_allocator() {
     free_list_head->next = NULL;
 
     initialized = 1; // True
-    printf("[INIT] Allocator initialized with %zu bytes\n", free_list_head->size)
+    printf("[INIT] Allocator initialized with %zu bytes\n", free_list_head->size);
 }
 
 // Custom malloc implementation
@@ -49,7 +47,8 @@ void init_allocator() {
  * Test program code *
  *********************/
 
-void main() {
+int main() {
     printf("Custom Memory Allocator Test\n");
     init_allocator();
+    return 0;
 }
