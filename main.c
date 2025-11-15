@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 /******************
  * Allocator code *
@@ -38,7 +39,7 @@ void init_allocator() {
 }
 
 // Custom malloc implementation
-void my_malloc(size_t size) {
+void* my_malloc(size_t size) {
     if (!initialized) init_allocator(); // Init if not done yet.
     if (size == 0) return NULL; // Can't allocate if no room.
 
@@ -48,20 +49,60 @@ void my_malloc(size_t size) {
     block_header_t* current = free_list_head;
 
     // First-fit strategy: find first block that's big enough.
-    while (current =! NULL) {
+    while (current != NULL) {
         if (current ->is_free && current->size >= size) {
             printf("[ALLOC] Found free block: size=%zu at %p\n", current->size, (void*)current);
 
             // Should block be split?
             // Only split if remaining space is useful (> MIN_BLOCK_SIZE)
+            if (current->size >= size + sizeof(block_header_t) + MIN_BLOCK_SIZE) {
+                block_header_t* new_block = (block_header_t*) ((char*)current + sizeof(block_header_t) + size);
 
+                new_block->size = current->size - size - sizeof(block_header_t);
+                new_block->is_free = 1; // True
+                new_block->next = current->next;
+
+                // Update current block
+                current->size = size;
+                current->next = new_block;
+
+                printf("[SPLIT] Split block: allocated=%zu, remaining=%zu\n", size, new_block->size);
+            }
+
+            // Mark block as not free
+            current->is_free = 0;
+
+            // Return pointer to data area (skip header)
+            void* ptr = (char*)current + sizeof(block_header_t);
+            printf("[ALLOC] Returning pointer %p\n", ptr);
+            return ptr;
         }
+        current = current->next;
     }
+    printf("[ALLOC] FAILED: No suitable block found for size %zu\n", size);
+    return NULL;
 }
 
 // Custom free implementation
-void my_free() {
+void my_free(void* ptr) {
+    if (!ptr) return;
 
+    printf("[FREE] Freeing pointer %p\n", ptr);
+
+    // Get header from user pointer
+    block_header_t* header = (block_header_t*) ((char*)ptr - sizeof(block_header_t));
+
+    // Mark as free
+    header->is_free = 1;
+
+    // Coalesce with next block if it's free
+    if (header->next && header->next->is_free) {
+        printf("[COALESCE] Merging with next block: %zu + %zu\n", header->size, header->next->size);
+        header->size += sizeof(block_header_t) + header->next->size;
+        header->next = header->next->next;
+    }
+
+    //
 }
 
 // Debug function to print memory state
