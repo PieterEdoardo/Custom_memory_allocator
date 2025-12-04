@@ -91,5 +91,8 @@ int main() {
     my_free(d);
     print_memory_state();
 
+    printf("--- Cleanup ---");
+    cleanup_allocator();
+
     return 0;
 }

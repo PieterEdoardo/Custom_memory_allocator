@@ -159,6 +159,14 @@ void my_free(void* ptr) {
     }
 }
 
+void cleanup_allocator(void) {
+    // Static version doesn't need to free memory
+    // (it's in the data section, freed when program exits)
+    printf("[CLEANUP] Static allocator needs no cleanup\n");
+    initialized = 0;
+    free_list_head = NULL;
+}
+
 void print_memory_state() {
     printf("\n=== Memory State ===\n");
     block_header_t* current = free_list_head;

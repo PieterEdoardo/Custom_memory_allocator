@@ -2,10 +2,10 @@
 #include <stdint.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <error.h>
+#include <errno.h>
 #include "allocator.h"
 
-#define POOL_SIZE 1024 * 1024       // 1MB memory pool
+#define POOL_SIZE (1024 * 1024)       // 1MB memory pool
 #define MIN_BLOCK_SIZE 32
 #define BLOCK_MAGIC 0xDEADBEEF
 #define FREED_MAGIC 0xFEEDFACE
@@ -31,7 +31,7 @@ size_t align_size(size_t size) {
 }
 
 void init_allocator() {
-    if (!initialized) return;
+    if (initialized) return;
 
     printf("[INIT] Requesting %zu bytes from OS via mmap()...\n", (size_t)POOL_SIZE);
 
@@ -48,6 +48,14 @@ void init_allocator() {
     if (memory_pool == MAP_FAILED) {
         perror("[ERROR] mmap failed");
         memory_pool = NULL;
+        return;
+    }
+
+    printf("[INIT] mmap returned: %p\n", memory_pool);
+    printf("[INIT] MAP_FAILED is: %p\n", (void*)MAP_FAILED);
+
+    if (memory_pool == NULL) {
+        printf("[ERROR] memory_pool is NULL!\n");
         return;
     }
 
@@ -81,8 +89,7 @@ void* my_malloc(size_t size) {
     if (!initialized) init_allocator();
     if (size == 0) return NULL;
 
-    size = align_size(size);
-    size_t actual_size = size + sizeof(unsigned int);
+    size_t actual_size = align_size(size) + sizeof(unsigned int);
     actual_size = align_size(actual_size);
 
     block_header_t* current = free_list_head;
@@ -115,7 +122,7 @@ void* my_malloc(size_t size) {
             void* ptr = (char*)current + sizeof(block_header_t);
 
             // Place canary at the END of the user's data
-            unsigned int* end_canary = (unsigned int*)((char*)ptr + size);
+            unsigned int* end_canary = (unsigned int*)((char*)ptr + actual_size - sizeof(unsigned int));
             *end_canary = CANARY_VALUE;
 
             printf("[ALLOC] Returning pointer %p (canary placed at offset %zu)\n", ptr, size);
