@@ -16,7 +16,7 @@
 #define STRATEGY_NEXT_FIT 1
 #define STRATEGY_BEST_FIT 2
 
-#define ALLOCATOR_STRATEGY STRATEGY_FIRST_FIT
+#define ALLOCATOR_STRATEGY STRATEGY_NEXT_FIT
 
 typedef struct block_header {
     unsigned int magic;
@@ -29,6 +29,9 @@ typedef struct block_header {
 
 static void* memory_pool = NULL;
 static block_header_t* free_list_head = NULL;
+#if ALLOCATOR_STRATEGY == STRATEGY_NEXT_FIT
+static block_header_t* last_allocated = NULL;  // ← ADD THIS
+#endif
 static int initialized = 0; // False
 
 size_t align_size(size_t size) {
@@ -117,7 +120,7 @@ static void* allocate_from_block(block_header_t* current, size_t size, size_t ac
     printf("[ALLOC] Returning pointer %p (canary placed at offset %zu)\n", ptr, size);
     return ptr;
 }
-
+#if ALLOCATOR_STRATEGY == STRATEGY_FIRST_FIT
 static block_header_t* find_first_fit(size_t actual_size) {
     block_header_t* current = free_list_head;
 
@@ -130,6 +133,54 @@ static block_header_t* find_first_fit(size_t actual_size) {
 
     return NULL;
 }
+#elif ALLOCATOR_STRATEGY == STRATEGY_NEXT_FIT
+static block_header_t* find_next_fit(size_t actual_size) {
+    block_header_t* start = last_allocated ? last_allocated : free_list_head;
+    block_header_t* current = start;
+
+    while (current != NULL) {
+        if (current->is_free && current->size >= actual_size) {
+            last_allocated = current;
+            return current;
+        }
+        current = current->next;
+    }
+
+    //If nothing found, search from beginning.
+    current = free_list_head;
+    while (current != start) {
+        if (current->is_free && current->size >= actual_size) {
+            last_allocated = current;
+            return current;
+        }
+        current = current->next;
+    }
+
+    // Still nothing?
+    return NULL;
+}
+#elif ALLOCATOR_STRATEGY == STRATEGY_BEST_FIT
+static block_header_t* find_best_fit(size_t actual_size) {
+    block_header_t* current = free_list_head;
+    block_header_t* best = NULL;
+
+    while (current != NULL) {
+        if (current->is_free && current->size >= actual_size) {
+            // smaller?
+            if (best == NULL || current->size < best->size) {
+                best = current;
+                // perfect?
+                if (best->size == actual_size) {
+                    break;
+                }
+            }
+        }
+        current = current->next;
+    }
+
+    return best;
+}
+#endif
 
 void* my_malloc(size_t size) {
     if (!initialized) init_allocator();
@@ -143,9 +194,9 @@ void* my_malloc(size_t size) {
 #if ALLOCATOR_STRATEGY == STRATEGY_FIRST_FIT
     found_block = find_first_fit(actual_size);
 #elif ALLOCATOR_STRATEGY == STRATEGY_NEXT_FIT
-    // found_block = find_next_fit(actual_size);
+    found_block = find_next_fit(actual_size);
 #elif ALLOCATOR_STRATEGY == STRATEGY_BEST_FIT
-    // found_block = find_next_fit(actual_size);
+    found_block = find_best_fit(actual_size);
 #endif
 
     if (!found_block) {
