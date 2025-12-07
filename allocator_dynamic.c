@@ -12,6 +12,11 @@
 #define CANARY_VALUE 0xDEADC0DE
 #define ALIGNMENT 8
 
+#define STRATEGY_FIRST_FIT 0
+#define STRATEGY_NEXT_FIT 1
+#define STRATEGY_BEST_FIT 2
+
+#define ALLOCATOR_STRATEGY STRATEGY_FIRST_FIT
 
 typedef struct block_header {
     unsigned int magic;
@@ -85,6 +90,47 @@ void cleanup_allocator(void) {
     }
 }
 
+static void* allocate_from_block(block_header_t* current, size_t size, size_t actual_size){
+    printf("[ALLOC] Found free block: size=%zu at %p\n", current->size, (void*)current);
+
+    if (current->size >= actual_size + sizeof(block_header_t) + MIN_BLOCK_SIZE) {
+        block_header_t* new_block = (block_header_t*)((char*)current + sizeof(block_header_t) + actual_size);
+
+        new_block->size = current->size - actual_size - sizeof(block_header_t);
+        new_block->is_free = 1;
+        new_block->next = current->next;
+        new_block->magic = FREED_MAGIC;
+
+        current->size = actual_size;
+        current->next = new_block;
+        printf("[SPLIT] Split block: allocated=%zu, remaining=%zu\n", size, new_block->size);
+    }
+
+    current->is_free = 0;
+    current->magic = BLOCK_MAGIC;
+
+    void* ptr = (char*)current + sizeof(block_header_t);
+
+    unsigned int* end_canary = (unsigned int*)((char*)ptr + actual_size - sizeof(unsigned int));
+    *end_canary = CANARY_VALUE;
+
+    printf("[ALLOC] Returning pointer %p (canary placed at offset %zu)\n", ptr, size);
+    return ptr;
+}
+
+static block_header_t* find_first_fit(size_t actual_size) {
+    block_header_t* current = free_list_head;
+
+    while (current != NULL) {
+        if (current->is_free && current->size >= actual_size) {
+            return current;
+        }
+        current = current->next;
+    }
+
+    return NULL;
+}
+
 void* my_malloc(size_t size) {
     if (!initialized) init_allocator();
     if (size == 0) return NULL;
@@ -92,46 +138,22 @@ void* my_malloc(size_t size) {
     size_t actual_size = align_size(size) + sizeof(unsigned int);
     actual_size = align_size(actual_size);
 
-    block_header_t* current = free_list_head;
+    block_header_t* found_block = NULL;
 
-    // First-fit strategy: find first block that's big enough.
-    while (current != NULL) {
-        if (current ->is_free && current->size >= actual_size) {
-            printf("[ALLOC] Found free block: size=%zu at %p\n", current->size, (void*)current);
+#if ALLOCATOR_STRATEGY == STRATEGY_FIRST_FIT
+    found_block = find_first_fit(actual_size);
+#elif ALLOCATOR_STRATEGY == STRATEGY_NEXT_FIT
+    // found_block = find_next_fit(actual_size);
+#elif ALLOCATOR_STRATEGY == STRATEGY_BEST_FIT
+    // found_block = find_next_fit(actual_size);
+#endif
 
-            // Should block be split?
-            // Only split if remaining space is useful (> MIN_BLOCK_SIZE)
-            if (current->size >= actual_size + sizeof(block_header_t) + MIN_BLOCK_SIZE) {
-                block_header_t* new_block = (block_header_t*) ((char*)current + sizeof(block_header_t) + actual_size);
-
-                new_block->size = current->size - actual_size - sizeof(block_header_t);
-                new_block->is_free = 1; // True
-                new_block->next = current->next;
-                new_block->magic = FREED_MAGIC;
-
-                // Update current block
-                current->size = actual_size;
-                current->next = new_block;
-
-                printf("[SPLIT] Split block: allocated=%zu, remaining=%zu\n", size, new_block->size);
-            }
-            current->is_free = 0;
-            current->magic = BLOCK_MAGIC; // Valid allocated Block.
-
-            // Return pointer to data area (skip header)
-            void* ptr = (char*)current + sizeof(block_header_t);
-
-            // Place canary at the END of the user's data
-            unsigned int* end_canary = (unsigned int*)((char*)ptr + actual_size - sizeof(unsigned int));
-            *end_canary = CANARY_VALUE;
-
-            printf("[ALLOC] Returning pointer %p (canary placed at offset %zu)\n", ptr, size);
-            return ptr;
-        }
-        current = current->next;
+    if (!found_block) {
+        printf("[ALLOC] FAILED: No suitable block found for size %zu\n", size);
+        return NULL;
     }
-    printf("[ALLOC] FAILED: No suitable block found for size %zu\n", size);
-    return NULL;
+
+    return allocate_from_block(found_block, size, actual_size);
 }
 
 void my_free(void* ptr) {
