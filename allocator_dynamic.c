@@ -16,7 +16,7 @@
 #define STRATEGY_NEXT_FIT 1
 #define STRATEGY_BEST_FIT 2
 
-#define ALLOCATOR_STRATEGY STRATEGY_NEXT_FIT
+#define ALLOCATOR_STRATEGY STRATEGY_FIRST_FIT
 
 typedef struct block_header {
     unsigned int magic;
@@ -26,6 +26,13 @@ typedef struct block_header {
     struct block_header* next;  // Pointer to next block in the list
 } block_header_t;
 
+static struct {
+    size_t allocations;
+    size_t frees;
+    size_t blocks_searched;
+    size_t splits;
+    size_t coalesces;
+} stats = {0};
 
 static void* memory_pool = NULL;
 static block_header_t* free_list_head = NULL;
@@ -36,6 +43,27 @@ static int initialized = 0; // False
 
 size_t align_size(size_t size) {
     return (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+}
+
+void print_allocator_stats(void) {
+    printf("\n=== Allocator Statistics ===\n");
+    printf("Total allocations: %zu\n", stats.allocations);
+    printf("Total frees: %zu\n", stats.frees);
+    printf("Total splits: %zu\n", stats.splits);
+    printf("Total coalesces: %zu\n", stats.coalesces);
+    if (stats.allocations > 0) {
+        printf("Avg blocks searched per allocation: %.2f\n",
+               (float)stats.blocks_searched / stats.allocations);
+    }
+    printf("===========================\n\n");
+}
+
+void reset_allocator_stats(void) {
+    stats.allocations = 0;
+    stats.frees = 0;
+    stats.blocks_searched = 0;
+    stats.splits = 0;
+    stats.coalesces = 0;
 }
 
 void init_allocator() {
@@ -123,14 +151,20 @@ static void* allocate_from_block(block_header_t* current, size_t size, size_t ac
 #if ALLOCATOR_STRATEGY == STRATEGY_FIRST_FIT
 static block_header_t* find_first_fit(size_t actual_size) {
     block_header_t* current = free_list_head;
+    size_t blocks_checked = 0;
 
     while (current != NULL) {
+        blocks_checked++;
         if (current->is_free && current->size >= actual_size) {
+            stats.blocks_searched += blocks_checked;
+            stats.allocations++;
             return current;
         }
         current = current->next;
     }
 
+    stats.blocks_searched += blocks_checked;
+    stats.allocations++;
     return NULL;
 }
 #elif ALLOCATOR_STRATEGY == STRATEGY_NEXT_FIT
