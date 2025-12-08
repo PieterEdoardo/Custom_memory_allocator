@@ -16,7 +16,7 @@
 #define STRATEGY_NEXT_FIT 1
 #define STRATEGY_BEST_FIT 2
 
-#define ALLOCATOR_STRATEGY STRATEGY_FIRST_FIT
+#define ALLOCATOR_STRATEGY STRATEGY_NEXT_FIT
 
 typedef struct block_header {
     unsigned int magic;
@@ -134,6 +134,7 @@ static void* allocate_from_block(block_header_t* current, size_t size, size_t ac
 
         current->size = actual_size;
         current->next = new_block;
+        stats.splits++;
         printf("[SPLIT] Split block: allocated=%zu, remaining=%zu\n", size, new_block->size);
     }
 
@@ -157,23 +158,25 @@ static block_header_t* find_first_fit(size_t actual_size) {
         blocks_checked++;
         if (current->is_free && current->size >= actual_size) {
             stats.blocks_searched += blocks_checked;
-            stats.allocations++;
             return current;
         }
         current = current->next;
     }
 
     stats.blocks_searched += blocks_checked;
-    stats.allocations++;
     return NULL;
 }
 #elif ALLOCATOR_STRATEGY == STRATEGY_NEXT_FIT
 static block_header_t* find_next_fit(size_t actual_size) {
     block_header_t* start = last_allocated ? last_allocated : free_list_head;
     block_header_t* current = start;
+    size_t blocks_checked = 0;
+
 
     while (current != NULL) {
+        blocks_checked++;
         if (current->is_free && current->size >= actual_size) {
+            stats.blocks_searched += blocks_checked;
             last_allocated = current;
             return current;
         }
@@ -183,13 +186,15 @@ static block_header_t* find_next_fit(size_t actual_size) {
     //If nothing found, search from beginning.
     current = free_list_head;
     while (current != start) {
+        blocks_checked++;
         if (current->is_free && current->size >= actual_size) {
+            stats.blocks_searched += blocks_checked;
             last_allocated = current;
             return current;
         }
         current = current->next;
     }
-
+    stats.blocks_searched += blocks_checked;
     // Still nothing?
     return NULL;
 }
@@ -197,9 +202,12 @@ static block_header_t* find_next_fit(size_t actual_size) {
 static block_header_t* find_best_fit(size_t actual_size) {
     block_header_t* current = free_list_head;
     block_header_t* best = NULL;
+    size_t blocks_checked = 0;
 
     while (current != NULL) {
+        blocks_checked++;
         if (current->is_free && current->size >= actual_size) {
+            stats.blocks_searched += blocks_checked;
             // smaller?
             if (best == NULL || current->size < best->size) {
                 best = current;
@@ -211,7 +219,7 @@ static block_header_t* find_best_fit(size_t actual_size) {
         }
         current = current->next;
     }
-
+    stats.blocks_searched += blocks_checked;
     return best;
 }
 #endif
@@ -232,6 +240,8 @@ void* my_malloc(size_t size) {
 #elif ALLOCATOR_STRATEGY == STRATEGY_BEST_FIT
     found_block = find_best_fit(actual_size);
 #endif
+
+    stats.allocations++;
 
     if (!found_block) {
         printf("[ALLOC] FAILED: No suitable block found for size %zu\n", size);
@@ -273,6 +283,7 @@ void my_free(void* ptr) {
 
     // Coalesce with next block if it's free
     if (header->next && header->next->is_free) {
+        stats.coalesces++;
         printf("[COALESCE] Merging with next block: %zu + %zu\n", header->size, header->next->size);
         header->size += sizeof(block_header_t) + header->next->size;
         header->next = header->next->next;
@@ -290,6 +301,7 @@ void my_free(void* ptr) {
         current->size += sizeof(block_header_t) + header->size;
         current->next = header->next;
     }
+    stats.frees++;
 }
 
 void print_memory_state() {

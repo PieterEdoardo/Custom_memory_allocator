@@ -12,5 +12,6 @@ void print_memory_state(void);
 void cleanup_allocator();
 void print_allocator_stats(void);
 void reset_allocator_stats(void);
+void benchmark_fragmentation_test(void);
 
 #endif

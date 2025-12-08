@@ -4,10 +4,14 @@
 
 #include "allocator.h"
 
+#define ENABLE_ALLOC_TESTS 0
+#define ENABLE_ALLOC_BENCHMARKS 1
+
 /****************
  * Test program *
  ****************/
 int main() {
+#if ENABLE_ALLOC_TESTS
     printf("Custom Memory Allocator Test\n");
     init_allocator();
 
@@ -91,8 +95,81 @@ int main() {
     my_free(d);
     print_memory_state();
 
+    print_allocator_stats();
+
     printf("--- Cleanup ---");
     cleanup_allocator();
+
+#elif ENABLE_ALLOC_BENCHMARKS
+    printf("\n\n");
+    printf("╔════════════════════════════════════════════════╗\n");
+    printf("║         ALLOCATION STRATEGY BENCHMARK          ║\n");
+    printf("╚════════════════════════════════════════════════╝\n\n");
+    printf("=== Fragmentation Stress Test ===\n");
+    printf("This test creates fragmentation and measures strategy performance.\n\n");
+
+    init_allocator();
+    reset_allocator_stats();
+
+    // Phase 1: Allocate many different-sized blocks
+    printf("Phase 1: Allocating 50 varied-size blocks...\n");
+    void* ptrs[100] = {NULL};
+    int sizes[] = {16, 32, 64, 128, 256, 48, 80, 24, 96, 160};
+
+    for (int i = 0; i < 50; i++) {
+        size_t size = sizes[i % 10];
+        ptrs[i] = my_malloc(size);
+    }
+
+    printf("After allocations:\n");
+    print_memory_state();
+
+    // Phase 2: Free every other block (creates fragmentation!)
+    printf("\nPhase 2: Freeing every other block (creates fragmentation)...\n");
+    for (int i = 1; i < 50; i += 2) {
+        my_free(ptrs[i]);
+        ptrs[i] = NULL;
+    }
+
+    printf("After creating fragmentation:\n");
+    print_memory_state();
+
+    // Phase 3: Try to allocate into fragmented space
+    printf("\nPhase 3: Allocating into fragmented space (strategy matters here!)...\n");
+    reset_allocator_stats();  // Reset to measure only this phase
+
+    for (int i = 0; i < 20; i++) {
+        size_t size = 32 + (i * 8);  // Varied sizes: 32, 40, 48, 56...
+        void* ptr = my_malloc(size);
+        if (ptr) {
+            // Use first available slot
+            for (int j = 0; j < 100; j++) {
+                if (ptrs[j] == NULL) {
+                    ptrs[j] = ptr;
+                    break;
+                }
+            }
+        }
+    }
+
+    printf("After reallocating:\n");
+    print_memory_state();
+
+    printf("\nPhase 3 Statistics (THIS IS WHERE STRATEGIES DIFFER):\n");
+    print_allocator_stats();
+
+    // Cleanup
+    for (int i = 0; i < 100; i++) {
+        if (ptrs[i] != NULL) {
+            if (ptrs[i]) my_free(ptrs[i]);
+        } else {
+            printf("[BENCHMARK ERROR] ptrs[%d] = NULL\n", i);
+        }
+    }
+
+    cleanup_allocator();
+    printf("\n");
+#endif
 
     return 0;
 }
