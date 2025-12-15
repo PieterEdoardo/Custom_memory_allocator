@@ -1,6 +1,7 @@
 # Project files
 CMakeLists.txt
-.idea
+/.idea
+/bin
 
 # Prerequisites
 *.d

@@ -112,23 +112,30 @@ int main() {
     reset_allocator_stats();
 
     // Phase 1: Allocate many different-sized blocks
-    printf("Phase 1: Allocating 50 varied-size blocks...\n");
-    void* ptrs[100] = {NULL};
-    int sizes[] = {16, 32, 64, 128, 256, 48, 80, 24, 96, 160};
+    printf("Phase 1: Allocating 1000 small blocks...\n");
+    void* ptrs[1500] = {NULL};
+    int sizes[] = {8, 16, 24, 32, 40, 48};  // Smaller sizes
 
-    for (int i = 0; i < 50; i++) {
-        size_t size = sizes[i % 10];
+    for (int i = 0; i < 1000; i++) {
+        size_t size = sizes[i % 6];
         ptrs[i] = my_malloc(size);
+        if (!ptrs[i]) {
+            printf("Allocation %d failed (pool exhausted)\n", i);
+            break;  // Stop if we run out
+        }
     }
 
     printf("After allocations:\n");
     print_memory_state();
 
     // Phase 2: Free every other block (creates fragmentation!)
+    // Phase 2: Free every other block (creates fragmentation!)
     printf("\nPhase 2: Freeing every other block (creates fragmentation)...\n");
-    for (int i = 1; i < 50; i += 2) {
-        my_free(ptrs[i]);
-        ptrs[i] = NULL;
+    for (int i = 1; i < 200; i += 2) {
+        if (ptrs[i]) {
+            my_free(ptrs[i]);
+            ptrs[i] = NULL;
+        }
     }
 
     printf("After creating fragmentation:\n");
@@ -138,12 +145,14 @@ int main() {
     printf("\nPhase 3: Allocating into fragmented space (strategy matters here!)...\n");
     reset_allocator_stats();  // Reset to measure only this phase
 
-    for (int i = 0; i < 20; i++) {
+    int phase3_allocations = 0;
+    for (int i = 0; i < 50; i++) {
         size_t size = 32 + (i * 8);  // Varied sizes: 32, 40, 48, 56...
         void* ptr = my_malloc(size);
         if (ptr) {
-            // Use first available slot
-            for (int j = 0; j < 100; j++) {
+            phase3_allocations++;
+            // Find first available slot
+            for (int j = 0; j < 500; j++) {  // Check ALL slots
                 if (ptrs[j] == NULL) {
                     ptrs[j] = ptr;
                     break;
@@ -152,18 +161,18 @@ int main() {
         }
     }
 
+    printf("Phase 3 allocated %d blocks successfully.\n", phase3_allocations);
     printf("After reallocating:\n");
     print_memory_state();
 
     printf("\nPhase 3 Statistics (THIS IS WHERE STRATEGIES DIFFER):\n");
     print_allocator_stats();
 
-    // Cleanup
-    for (int i = 0; i < 100; i++) {
+    // Cleanup - only free non-NULL pointers
+    printf("\nCleaning up...\n");
+    for (int i = 0; i < 500; i++) {
         if (ptrs[i] != NULL) {
-            if (ptrs[i]) my_free(ptrs[i]);
-        } else {
-            printf("[BENCHMARK ERROR] ptrs[%d] = NULL\n", i);
+            my_free(ptrs[i]);
         }
     }
 

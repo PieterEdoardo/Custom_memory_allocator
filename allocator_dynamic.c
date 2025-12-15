@@ -290,7 +290,6 @@ void my_free(void* ptr) {
     }
 
     // Coalesce with previous block if it's free
-    // Need to find previous block by walking from head
     block_header_t* current = free_list_head;
     while (current && current->next != header) {
         current = current->next;
