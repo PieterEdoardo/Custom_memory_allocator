@@ -47,7 +47,7 @@ _Static_assert(HEAD_SIZE % ALIGNMENT == 0, "HEAD_SIZE must preserve payload alig
 _Static_assert(MEMORY_POOL_SIZE % ALIGNMENT == 0, "Pool header must preserve block alignment");
 
 static memory_pool_t* pool_list_head = NULL;
-static block_header_t* last_allocated = NULL;
+// static block_header_t* last_allocated = NULL;
 static int initialized = 0; // False
 
 static struct {
@@ -206,4 +206,104 @@ static void* allocate_from_block(block_header_t* block, size_t actual_size) {
 
     // printf("[ALLOC] Returning pointer %p\n", ptr);
     return ptr;
+}
+
+void* my_malloc(size_t size) {
+    if (!initialized) init_allocator();
+    if (size == 0) return NULL;
+
+    size_t aligned_size = align_up(size);
+    size_t actual_size = aligned_size + sizeof(uint32_t);
+    actual_size = align_up(actual_size);
+
+    memory_pool_t* found_pool = NULL;
+    block_header_t* found_block = NULL;
+
+    found_block = find_block_in_pools(actual_size, &found_pool);
+
+    if (!found_block) {
+        size_t min_pool_size = MEMORY_POOL_SIZE + HEAD_SIZE +  actual_size + MIN_BLOCK_SIZE;
+        memory_pool_t* new_pool = create_pool(min_pool_size);
+
+        if (!new_pool) {
+            printf("[ALLOC] FAILED: Could not create new pool\n");
+            return NULL;
+        }
+
+        found_block = find_block_in_pools(actual_size, &found_pool);
+
+        if (!found_block) {
+            printf("[ALLOC] FAILED: Still no space after creating pool!\n");
+            return NULL;
+        }
+    }
+
+    stats.allocations++;
+    return allocate_from_block(found_block, actual_size);
+}
+
+void my_free(void* ptr) {
+    if (!ptr) return;
+
+    block_header_t* header = (block_header_t*)((char*)ptr - HEAD_SIZE);
+
+    if (header->magic == FREED_MAGIC) {
+        printf("[ERROR] Double free detected at %p!\n", ptr);
+        return;
+    }
+
+    if (header->magic != BLOCK_MAGIC) {
+        printf("[ERROR] Invalid pointer passed to my_free: %p\n", ptr);
+        return;
+    }
+
+    unsigned int* end_canary = (unsigned int*)((char*)ptr + header->size - sizeof(uint32_t));
+    if (*end_canary != CANARY_VALUE) {
+        printf("[ERROR] Buffer overflow detected at %p! Canary was 0x%X, expected 0x%X\n",ptr, *end_canary, CANARY_VALUE);
+        // Continue to free, but user knows there was corruption.
+    } else {
+        printf("[CANARY] Buffer overflow check passed\n");
+    }
+
+    header->magic = FREED_MAGIC;
+    header->is_free = 1;
+    stats.frees++;
+
+    memory_pool_t* block_pool = NULL;
+    memory_pool_t* current_pool = pool_list_head;
+
+    // Check for header within this pool's memory range.
+    while (current_pool) {
+        if ((void*)header >= current_pool->memory && (void*)header < current_pool->memory + current_pool->size) {
+            block_pool = current_pool;
+            break;
+        }
+        current_pool = current_pool->next;
+    }
+
+    if (!block_pool) {
+        printf("[ERROR] Could not find pool for freed block!\n");
+        return;
+    }
+
+    // Coalesce with next block if it's free
+    if (header->next && header->next->is_free) {
+        stats.coalesces++;
+        printf("[COALESCE] Merging with next block: %zu + %zu\n", header->size, header->next->size);
+        header->size += sizeof(block_header_t) + header->next->size;
+        header->next = header->next->next;
+    }
+
+    // Coalesce with previous block if it's free
+    block_header_t* current = free_list_head;
+    while (current && current->next != header) {
+        current = current->next;
+    }
+
+    if (current && current->is_free) {
+        printf("[COALESCE] Merging with previous block: %zu + %zu\n", current->size, header->size);
+        current->size += sizeof(block_header_t) + header->size;
+        current->next = header->next;
+    }
+    stats.frees++;
 }
