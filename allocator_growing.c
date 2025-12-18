@@ -1,8 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <sys/mman.h>
-#include <unistd.h>
-#include <errno.h>
 #include "allocator.h"
 
 /******************
@@ -47,7 +45,7 @@ _Static_assert(HEAD_SIZE % ALIGNMENT == 0, "HEAD_SIZE must preserve payload alig
 _Static_assert(MEMORY_POOL_SIZE % ALIGNMENT == 0, "Pool header must preserve block alignment");
 
 static memory_pool_t* pool_list_head = NULL;
-// static block_header_t* last_allocated = NULL;
+static block_header_t* last_allocated = NULL;
 static int initialized = 0; // False
 
 static struct {
@@ -267,7 +265,6 @@ void my_free(void* ptr) {
 
     header->magic = FREED_MAGIC;
     header->is_free = 1;
-    stats.frees++;
 
     memory_pool_t* block_pool = NULL;
     memory_pool_t* current_pool = pool_list_head;
@@ -288,22 +285,132 @@ void my_free(void* ptr) {
 
     // Coalesce with next block if it's free
     if (header->next && header->next->is_free) {
-        stats.coalesces++;
-        printf("[COALESCE] Merging with next block: %zu + %zu\n", header->size, header->next->size);
-        header->size += sizeof(block_header_t) + header->next->size;
-        header->next = header->next->next;
+        if ((void*)header->next >= block_pool->memory && (void*)header->next < (char*)block_pool->memory + block_pool->size) {
+            printf("[COALESCE] Merging with next block: %zu + %zu\n", header->size, header->next->size);
+            header->size += HEAD_SIZE + header->next->size;
+            header->next = header->next->next;
+            stats.coalesces++;
+        }
     }
 
     // Coalesce with previous block if it's free
-    block_header_t* current = free_list_head;
-    while (current && current->next != header) {
-        current = current->next;
+    block_header_t* previous = block_pool->free_list_head;
+    while (previous && previous->next != header) {
+        previous = previous->next;
     }
 
-    if (current && current->is_free) {
-        printf("[COALESCE] Merging with previous block: %zu + %zu\n", current->size, header->size);
-        current->size += sizeof(block_header_t) + header->size;
-        current->next = header->next;
+    if (previous && previous->is_free) {
+        printf("[COALESCE] Merging with previous block: %zu + %zu\n", previous->size, header->size);
+        previous->size += HEAD_SIZE + header->size;
+        previous->next = header->next;
     }
     stats.frees++;
+}
+
+void print_memory_state(void) {
+    printf("\n=== Memory State ===\n");
+
+    if (!pool_list_head) {
+        printf("No pools allocated\n");
+        printf("===================\n\n");
+        return;
+    }
+
+    memory_pool_t* current_pool = pool_list_head;
+    int pool_num = 1;
+    size_t total_free = 0;
+    size_t total_used = 0;
+
+    while (current_pool) {
+        printf("\n--- Pool #%d (size: %zu bytes, addr: %p) ---\n",
+               pool_num, current_pool->size, current_pool->memory);
+
+        block_header_t* current_block = current_pool->free_list_head;
+        int block_num = 0;
+
+        while (current_block) {
+            printf("  Block %d: size=%zu, %s, addr=%p\n",
+                   block_num++,
+                   current_block->size,
+                   current_block->is_free ? "FREE" : "ALLOCATED",
+                   (void*)current_block);
+
+            if (current_block->is_free) {
+                total_free += current_block->size;
+            } else {
+                total_used += current_block->size;
+            }
+
+            current_block = current_block->next;
+        }
+
+        current_pool = current_pool->next;
+        pool_num++;
+    }
+
+    printf("\n--- Summary ---\n");
+    printf("Total pools: %zu\n", stats.pools_created);
+    printf("Total free: %zu bytes\n", total_free);
+    printf("Total used: %zu bytes\n", total_used);
+    printf("===================\n\n");
+}
+
+void cleanup_allocator(void) {
+    printf("[CLEANUP] Freeing all pools...\n");
+
+    memory_pool_t* current = pool_list_head;
+    int pool_count = 0;
+
+    while (current) {
+        memory_pool_t* next = current->next;
+
+        printf("[CLEANUP] Freeing pool at %p (size: %zu)\n",
+               current->memory, current->size);
+
+        if (munmap(current->memory, current->size) == -1) {
+            perror("[ERROR] munmap failed");
+        }
+
+        pool_count++;
+        current = next;
+    }
+
+    printf("[CLEANUP] Freed %d pools\n", pool_count);
+
+    pool_list_head = NULL;
+    last_allocated = NULL;
+    initialized = 0;
+
+    // Reset stats
+    stats.allocations = 0;
+    stats.frees = 0;
+    stats.blocks_searched = 0;
+    stats.splits = 0;
+    stats.coalesces = 0;
+    stats.pools_created = 0;
+}
+
+void print_allocator_stats(void) {
+    printf("\n=== Allocator Statistics ===\n");
+    printf("Total allocations: %zu\n", stats.allocations);
+    printf("Total frees: %zu\n", stats.frees);
+    printf("Total splits: %zu\n", stats.splits);
+    printf("Total coalesces: %zu\n", stats.coalesces);
+    printf("Pools created: %zu\n", stats.pools_created);
+
+    if (stats.allocations > 0) {
+        printf("Avg blocks searched per allocation: %.2f\n",
+               (float)stats.blocks_searched / stats.allocations);
+    }
+
+    printf("============================\n\n");
+}
+
+void reset_allocator_stats(void) {
+    stats.allocations = 0;
+    stats.frees = 0;
+    stats.blocks_searched = 0;
+    stats.splits = 0;
+    stats.coalesces = 0;
+    // Don't reset pools_created - that's structural info
 }
