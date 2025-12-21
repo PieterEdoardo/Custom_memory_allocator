@@ -2,14 +2,14 @@
 #include <stdint.h>
 #include <sys/mman.h>
 #include <stddef.h>
+#include <stdlib.h>
+
 #include "allocator.h"
 
 /******************
  * Configuration *
  ******************/
-#define INITIAL_POOL_SIZE (1024 * 1024)         // 1MB memory pool
 #define MAX_POOLS 10
-#define MIN_BLOCK_SIZE 32
 #define BLOCK_MAGIC 0xDEADBEEF
 #define FREED_MAGIC 0xFEEDFACE
 #define CANARY_VALUE 0xDEADC0DE
@@ -17,6 +17,8 @@
 #define ALIGN_UP_CONST(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
 #define HEAD_SIZE ALIGN_UP_CONST(sizeof(block_header_t), ALIGNMENT)
 #define MEMORY_POOL_SIZE ALIGN_UP_CONST(sizeof(memory_pool_t), ALIGNMENT)
+#define MIN_BLOCK_SIZE ALIGN_UP_CONST(HEAD_SIZE + (ALIGNMENT * 2), ALIGNMENT)
+#define INITIAL_POOL_SIZE ALIGN_UP_CONST((1024 * 1024), ALIGNMENT)         // 1MB memory pool
 
 /*******************
  * Data Structures *
@@ -37,9 +39,10 @@ typedef struct memory_pool {
     struct memory_pool* next;
 } memory_pool_t;
 
-_Static_assert(ALIGNMENT >= _Alignof(max_align_t), "ALIGNMENT too small for platform");
+_Static_assert(ALIGNMENT >= _Alignof(max_align_t), "ALIGNMENT must match platform max alignment");
 _Static_assert(HEAD_SIZE % ALIGNMENT == 0, "HEAD_SIZE must preserve payload alignment");
 _Static_assert(MEMORY_POOL_SIZE % ALIGNMENT == 0, "Pool header must preserve block alignment");
+_Static_assert(INITIAL_POOL_SIZE >= MEMORY_POOL_SIZE + MIN_BLOCK_SIZE, "Initial pool size is too small");
 
 static memory_pool_t* pool_list_head = NULL;
 static block_header_t* last_allocated = NULL;
@@ -239,6 +242,79 @@ void* my_malloc(size_t size) {
 
     stats.allocations++;
     return allocate_from_block(found_block, size, actual_size);
+}
+
+void* my_realloc(void* ptr, size_t size) {
+    if (!initialized) init_allocator();
+
+    // TODO: Case 1 - ptr is NULL
+    if (ptr == NULL) {
+        return my_malloc(size);
+    }
+    // TODO: Case 2 - size is 0
+    if (size == 0) {
+        my_free(ptr);
+        return NULL;
+    }
+
+    // TODO: Get header and validate
+    block_header_t* header = (block_header_t*)((char*)ptr - HEAD_SIZE);
+    unsigned int* end_canary = (unsigned int*)((char*)ptr + header->user_size);
+
+    if (header->magic != BLOCK_MAGIC) {
+        printf("[ERROR] Invalid pointer passed to my_realloc:%p\n", ptr);
+        return NULL;
+    }
+    // TODO: Calculate new size
+    size_t new_actual_size = align_up(align_up(size) + sizeof(uint32_t));
+
+    // TODO: Case 3a - Shrinking (new_size <= current_size)
+    if (header->size >= new_actual_size) {
+        header->size = new_actual_size;
+        header->user_size = size;
+
+        if (header->size >= new_actual_size + HEAD_SIZE + MIN_BLOCK_SIZE) {
+            block_header_t* new_block = (block_header_t*)
+                        ((char*)header + HEAD_SIZE + new_actual_size);
+
+            new_block->size = header->size - new_actual_size - HEAD_SIZE;
+            new_block->user_size = size;
+            new_block->is_free = 1;
+            new_block->next = header->next;
+            new_block->prev = header;
+            new_block->magic = FREED_MAGIC;
+
+            if (header->next) header->next->prev = new_block;
+
+            header->next = new_block;
+
+            stats.splits++;
+        }
+
+        header->is_free = 0;
+        header->magic = BLOCK_MAGIC;
+
+        *end_canary = CANARY_VALUE;
+
+        return ptr;
+    }
+
+    // TODO: Case 3b - Growing in-place (next block is free)
+    if (header->next && header->next->is_free) {
+        size_t available_space = header->size + (uint32_t) + header->next->size;
+        if (available_space >= MIN_BLOCK_SIZE && available_space >= ) {}
+
+    }
+    // TODO: Case 3c - Must relocate (allocate, copy, free)
+
+
+    // Check canary value for buffer overflow
+    if (*end_canary != CANARY_VALUE) {
+        printf("[ERROR] Buffer overflow detected at %p! Canary was 0x%X, expected 0x%X\n",ptr, *end_canary, CANARY_VALUE);
+    } else {
+        printf("[CANARY] Buffer overflow check passed\n");
+    }
+    return ptr;
 }
 
 void my_free(void* ptr) {
