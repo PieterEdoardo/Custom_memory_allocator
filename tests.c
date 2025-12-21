@@ -272,6 +272,34 @@ void test_multi_pool_pattern() {
     TEST_PASS();
 }
 
+void test_basic_reallocation() {
+    printf("TEST 11: Basic Reallocation\n");
+    printf("------------------------\n");
+
+    void* ptr1 = my_malloc(100);
+    void* ptr2 = my_malloc(100);
+    void* ptr3 = my_malloc(100);
+    printf("Allocated 3 times 100 bytes at %p, %p, %p\n", ptr1, ptr2, ptr3);
+
+    ptr1 = my_realloc(ptr1, 50);
+    printf("Reallocation attempted to shrink ptr1 in location to 50 bytes at %p\n", ptr1);
+
+    printf("Attempting reallocation to grow ptr1 to 150 bytes at %p. This should conflict ptr2 at %p, and should move ptr1 to a new pool\n", ptr1, ptr2);
+    void* old_ptr1 = ptr1;
+    ptr1 = my_realloc(ptr1, 150);
+    printf("Old ptr1 location: %p, and old ptr1 location: %p\n", old_ptr1, ptr1);
+
+    printf("Attempting to free ptr3 at %p, to make room for ptr2 at %p to grow in place and absorb next block\n", ptr3, ptr2);
+    my_free(ptr3);
+    ptr2 = my_realloc(ptr2, 150);
+    print_memory_state();
+
+    my_free(ptr1);
+    my_free(ptr2);
+
+    TEST_PASS();
+}
+
 /****************
  * Test program *
  ****************/
@@ -399,6 +427,9 @@ int main() {
     reset_allocator_stats();
 
     test_multi_pool_pattern();
+    reset_allocator_stats();
+
+    test_basic_reallocation();
 
     printf("\n");
     printf("╔═══════════════════════════════════════════╗\n");
