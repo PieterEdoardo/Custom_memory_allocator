@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <sys/mman.h>
+#include <stddef.h>
 #include "allocator.h"
 
 /******************
@@ -12,23 +13,19 @@
 #define BLOCK_MAGIC 0xDEADBEEF
 #define FREED_MAGIC 0xFEEDFACE
 #define CANARY_VALUE 0xDEADC0DE
-#define ALIGNMENT (alignof(max_align_t))        // 16 on my platform and most x86_64 Linux systems.
+#define ALIGNMENT (_Alignof(max_align_t))        // 16 on my platform and most x86_64 Linux systems.
 #define ALIGN_UP_CONST(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
 #define HEAD_SIZE ALIGN_UP_CONST(sizeof(block_header_t), ALIGNMENT)
 #define MEMORY_POOL_SIZE ALIGN_UP_CONST(sizeof(memory_pool_t), ALIGNMENT)
-
-#define STRATEGY_FIRST_FIT 0
-#define STRATEGY_NEXT_FIT 1
-#define STRATEGY_BEST_FIT 2
-
-#define ALLOCATOR_STRATEGY STRATEGY_NEXT_FIT
 
 /*******************
  * Data Structures *
  *******************/
 typedef struct block_header {
     size_t size;
+    size_t user_size;
     struct block_header* next;
+    struct block_header* prev;
     uint32_t magic;
     uint8_t is_free;
 } block_header_t;
@@ -40,7 +37,7 @@ typedef struct memory_pool {
     struct memory_pool* next;
 } memory_pool_t;
 
-_Static_assert(ALIGNMENT >= alignof(max_align_t), "ALIGNMENT too small for platform");
+_Static_assert(ALIGNMENT >= _Alignof(max_align_t), "ALIGNMENT too small for platform");
 _Static_assert(HEAD_SIZE % ALIGNMENT == 0, "HEAD_SIZE must preserve payload alignment");
 _Static_assert(MEMORY_POOL_SIZE % ALIGNMENT == 0, "Pool header must preserve block alignment");
 
@@ -175,7 +172,7 @@ void init_allocator(void) {
     printf("[INIT] Allocator initialized\n");
 }
 
-static void* allocate_from_block(block_header_t* block, size_t actual_size) {
+static void* allocate_from_block(block_header_t* block, size_t user_size, size_t actual_size) {
     printf("[ALLOC] Found free block: size=%zu at %p\n", block->size, (void*)block);
 
     if (block->size >= actual_size + HEAD_SIZE + MIN_BLOCK_SIZE) {
@@ -183,9 +180,13 @@ static void* allocate_from_block(block_header_t* block, size_t actual_size) {
             ((char*)block + HEAD_SIZE + actual_size);
 
         new_block->size = block->size - actual_size - HEAD_SIZE;
+        new_block->user_size = user_size;
         new_block->is_free = 1;
         new_block->next = block->next;
+        new_block->prev = block;
         new_block->magic = FREED_MAGIC;
+
+        if (block->next) block->next->prev = new_block;
 
         block->size = actual_size;
         block->next = new_block;
@@ -199,7 +200,7 @@ static void* allocate_from_block(block_header_t* block, size_t actual_size) {
 
     void* ptr = (char*)block + HEAD_SIZE;
 
-    uint32_t* end_canary = (uint32_t*)((char*)ptr + actual_size - sizeof(uint32_t));
+    uint32_t* end_canary = (uint32_t*)((char*)ptr + block->user_size);
     *end_canary = CANARY_VALUE;
 
     // printf("[ALLOC] Returning pointer %p\n", ptr);
@@ -237,7 +238,7 @@ void* my_malloc(size_t size) {
     }
 
     stats.allocations++;
-    return allocate_from_block(found_block, actual_size);
+    return allocate_from_block(found_block, size, actual_size);
 }
 
 void my_free(void* ptr) {
@@ -245,17 +246,32 @@ void my_free(void* ptr) {
 
     block_header_t* header = (block_header_t*)((char*)ptr - HEAD_SIZE);
 
+    // Double free checks
     if (header->magic == FREED_MAGIC) {
         printf("[ERROR] Double free detected at %p!\n", ptr);
         return;
     }
 
+    // Alignment check
+    if ((uintptr_t)ptr % ALIGNMENT != 0) {
+        printf("[ERROR] Invalid pointer passed to my_free: %p\n", ptr);
+        return;
+    }
+
+    // Invalid pointer checks
     if (header->magic != BLOCK_MAGIC) {
         printf("[ERROR] Invalid pointer passed to my_free: %p\n", ptr);
         return;
     }
 
-    unsigned int* end_canary = (unsigned int*)((char*)ptr + header->size - sizeof(uint32_t));
+    // Header sanity check
+    if (header->size == 0) {
+        printf("[ERROR] Pointer passed to my_free refers to header with invalid size: %p\n", ptr);
+
+        return;
+    }
+
+    unsigned int* end_canary = (unsigned int*)((char*)ptr + header->user_size);
     if (*end_canary != CANARY_VALUE) {
         printf("[ERROR] Buffer overflow detected at %p! Canary was 0x%X, expected 0x%X\n",ptr, *end_canary, CANARY_VALUE);
         // Continue to free, but user knows there was corruption.
@@ -265,6 +281,8 @@ void my_free(void* ptr) {
 
     header->magic = FREED_MAGIC;
     header->is_free = 1;
+
+
 
     memory_pool_t* block_pool = NULL;
     memory_pool_t* current_pool = pool_list_head;
@@ -285,24 +303,24 @@ void my_free(void* ptr) {
 
     // Coalesce with next block if it's free
     if (header->next && header->next->is_free) {
-        if ((void*)header->next >= block_pool->memory && (void*)header->next < (char*)block_pool->memory + block_pool->size) {
+        if ((void*)header->next >= block_pool->memory && (char*)header->next < (char*)block_pool->memory + block_pool->size) {
             printf("[COALESCE] Merging with next block: %zu + %zu\n", header->size, header->next->size);
             header->size += HEAD_SIZE + header->next->size;
             header->next = header->next->next;
             stats.coalesces++;
+
+            if (header->next) header->next->prev = header;
         }
     }
 
     // Coalesce with previous block if it's free
-    block_header_t* previous = block_pool->free_list_head;
-    while (previous && previous->next != header) {
-        previous = previous->next;
-    }
+    if (header->prev && header->prev->is_free) {
+        printf("[COALESCE] Merging with previous block: %zu + %zu\n", header->prev->size, header->size);
+        header->prev->size += HEAD_SIZE + header->size;
+        header->prev->next = header->next;
+        stats.coalesces++;
 
-    if (previous && previous->is_free) {
-        printf("[COALESCE] Merging with previous block: %zu + %zu\n", previous->size, header->size);
-        previous->size += HEAD_SIZE + header->size;
-        previous->next = header->next;
+        if (header->next) header->next->prev = header->prev;
     }
     stats.frees++;
 }

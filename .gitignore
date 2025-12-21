@@ -2,6 +2,7 @@
 CMakeLists.txt
 /.idea
 /bin
+/tests
 
 # Prerequisites
 *.d
