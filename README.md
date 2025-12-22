@@ -4,12 +4,13 @@ A from-scratch implementation of dynamic memory allocation in C, demonstrating f
 
 ## Overview
 
-This project implements three versions of a custom memory allocator, each showcasing different levels of complexity and techniques:
+This project implements three versions of a custom memory allocator, each showcasing different levels of complexity and techniques. However, the README is not entirely updated yet to reflect the progress. Each full version of the allocator has it's own separate file.
 
 - **V1 (Static)**: Fixed memory pool allocator using static storage
 - **V2 (Dynamic)**: OS-backed allocator using `mmap()` with multiple allocation strategies
-- **V3 (Coming Soon)**: Compacting allocator with defragmentation support
-
+- **V3 (Growing)**: Growing memory pools, and realloc() implementation
+- **v4 (In development)**: Compacting. An implementation that features defragmentation techniques.
+- **v5 (In development)**: Segregated lists with size classes for maximum allocation performance.
 ## Features
 
 ### Core Functionality
