@@ -37,7 +37,7 @@ static char memory_pool[POOL_SIZE] __attribute__((aligned(16)));
 static block_header_t* free_list_head = NULL;
 static int initialized = 0; // False
 
-size_t align_size(size_t size) {
+size_t align_up(size_t size) {
     return (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
 }
 
@@ -61,9 +61,9 @@ void* my_malloc(size_t size) {
     if (!initialized) init_allocator();
     if (size == 0) return NULL;
 
-    size = align_size(size);
+    size = align_up(size);
     size_t actual_size = size + sizeof(unsigned int);
-    actual_size = align_size(actual_size);
+    actual_size = align_up(actual_size);
 
     block_header_t* current = free_list_head;
 
