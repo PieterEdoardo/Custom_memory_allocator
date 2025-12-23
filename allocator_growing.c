@@ -178,15 +178,12 @@ void init_allocator(void) {
     printf("[INIT] Allocator initialized\n");
 }
 
-static void* allocate_from_block(block_header_t* block, size_t user_size, size_t actual_size) {
-    printf("[ALLOC] Found free block: size=%zu at %p\n", block->size, (void*)block);
-
+void split_block_if_possible(block_header_t* block, size_t actual_size) {
     if (block->size >= actual_size + HEAD_SIZE + MIN_BLOCK_SIZE) {
-        block_header_t* new_block = (block_header_t*)
-            ((char*)block + HEAD_SIZE + actual_size);
+        block_header_t* new_block = (block_header_t*)((char*)block + HEAD_SIZE + actual_size);
 
         new_block->size = block->size - actual_size - HEAD_SIZE;
-        new_block->user_size = user_size;
+        new_block->user_size = 0;
         new_block->is_free = 1;
         new_block->next = block->next;
         new_block->prev = block;
@@ -200,17 +197,6 @@ static void* allocate_from_block(block_header_t* block, size_t user_size, size_t
         stats.splits++;
         // printf("[SPLIT] Split block: allocated=%zu, remaining=%zu\n", user_size, new_block->size);
     }
-
-    block->is_free = 0;
-    block->magic = BLOCK_MAGIC;
-
-    void* ptr = (char*)block + HEAD_SIZE;
-
-    uint32_t* end_canary = (uint32_t*)((char*)ptr + block->user_size);
-    *end_canary = CANARY_VALUE;
-
-    // printf("[ALLOC] Returning pointer %p\n", ptr);
-    return ptr;
 }
 
 void* my_malloc(size_t size) {
@@ -244,32 +230,46 @@ void* my_malloc(size_t size) {
     }
 
     stats.allocations++;
-    return allocate_from_block(found_block, size, actual_size);
+
+    printf("[ALLOC] Found free block: size=%zu at %p\n", found_block->size, (void*)found_block);
+
+    found_block->is_free = 0;
+    found_block->magic = BLOCK_MAGIC;
+
+    split_block_if_possible(found_block, actual_size);
+
+    found_block->user_size = size;
+
+    void* ptr = (char*)found_block + HEAD_SIZE;
+
+    uint32_t* end_canary = (uint32_t*)((char*)ptr + found_block->user_size);
+    *end_canary = CANARY_VALUE;
+
+    // printf("[ALLOC] Returning pointer %p\n", ptr);
+    return ptr;
 }
 
 void* my_realloc(void* ptr, size_t size) {
     if (!initialized) init_allocator();
 
-    // TODO: Case 1 - ptr is NULL
     if (ptr == NULL) {
         return my_malloc(size);
     }
-    // TODO: Case 2 - size is 0
+
     if (size == 0) {
         my_free(ptr);
         return NULL;
     }
 
-    // TODO: Get header and validate
     block_header_t* header = (block_header_t*)((char*)ptr - HEAD_SIZE);
 
     if (header->magic != BLOCK_MAGIC) {
         printf("[ERROR] Invalid pointer passed to my_realloc:%p\n", ptr);
         return NULL;
     }
-    // TODO: Calculate new size
+
     size_t new_actual_size = align_up(align_up(size) + sizeof(uint32_t));
-    // TODO: Case 3a - Shrinking (new_size <= current_size)
+    // Case 1 Shrink in place
     if (header->size >= new_actual_size) {
         header->user_size = size;
 
@@ -278,28 +278,13 @@ void* my_realloc(void* ptr, size_t size) {
 
         size_t leftover = header->size - new_actual_size;
 
-        if (header->size >= new_actual_size + HEAD_SIZE + MIN_BLOCK_SIZE) {
-            block_header_t* new_block = (block_header_t*)((char*)header + HEAD_SIZE + new_actual_size);
-
-            new_block->size = leftover - HEAD_SIZE;
-            new_block->user_size = 0;
-            new_block->is_free = 1;
-            new_block->next = header->next;
-            new_block->prev = header;
-            new_block->magic = FREED_MAGIC;
-
-            if (header->next) header->next->prev = new_block;
-
-            header->size = new_actual_size;
-            header->next = new_block;
-
-            stats.splits++;
-        }
+        // Split if shrinking leaves enough headspace
+        split_block_if_possible(header, new_actual_size);
 
         return ptr;
     }
 
-    // TODO: Case 3b - Growing in-place (next block is free)
+    // Case 2 grow in-place if if next block is free
     if (header->next && header->next->is_free) {
         size_t available_space = header->size + HEAD_SIZE + header->next->size;
 
@@ -309,58 +294,35 @@ void* my_realloc(void* ptr, size_t size) {
             header->size = available_space;
             header->next = old_next->next;
 
+            old_next->magic = 0;
+            old_next->next = NULL;
+            old_next->prev = NULL;
+
             if (header->next) header->next->prev = header;
 
             header->user_size = size;
             uint32_t* end_canary = (uint32_t*)((char*)ptr + size);
             *end_canary = CANARY_VALUE;
-            size_t leftover = header->size - new_actual_size;
 
-            if (header->size >= new_actual_size + HEAD_SIZE + MIN_BLOCK_SIZE) {
-                block_header_t* new_block = (block_header_t*)((char*)header + HEAD_SIZE + new_actual_size);
-
-                new_block->size = leftover - HEAD_SIZE;
-                new_block->user_size = 0;
-                new_block->is_free = 1;
-                new_block->next = header->next;
-                new_block->prev = header;
-                new_block->magic = FREED_MAGIC;
-
-                if (header->next) header->next->prev = new_block;
-
-                header->size = new_actual_size;
-                header->next = new_block;
-
-                stats.splits++;
-            }
+            // Split if there is room after coalescing
+            split_block_if_possible(header, new_actual_size);
             stats.coalesces++;
         }
 
         return ptr;
     }
-    // TODO: Case 3c - Must relocate (allocate, copy, free)
-    if (new_actual_size > header->size + header->next->size) {
 
-        void* new_ptr = my_malloc(size);
-        if (!new_ptr) return NULL;
+    // Case 3 Grow in-place but no next block is not free, so copy and free
+    void* new_ptr = my_malloc(size);
+    if (!new_ptr) return NULL;
 
-        // Copy smaller of odl and new sizes
-        size_t copy_size = (header->user_size < size) ? header->user_size : size;
-        memcpy(new_ptr, ptr, copy_size);
+    // Copy smaller of old and new sizes
+    size_t copy_size = (header->user_size < size) ? header->user_size : size;
+    memcpy(new_ptr, ptr, copy_size);
+    my_free(ptr);
 
-        my_free(ptr);
+    return new_ptr;
 
-        return new_ptr;
-    }
-
-
-    // Check canary value for buffer overflow
-    // if (*end_canary != CANARY_VALUE) {
-    //     printf("[ERROR] Buffer overflow detected at %p! Canary was 0x%X, expected 0x%X\n",ptr, *end_canary, CANARY_VALUE);
-    // } else {
-    //     printf("[CANARY] Buffer overflow check passed\n");
-    // }
-    return ptr;
 }
 
 void my_free(void* ptr) {
